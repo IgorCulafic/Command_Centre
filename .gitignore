@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+backend/.venv/
+*.egg-info/
+
+# Local database (lives on the NAS in prod; demo file in dev)
+*.db
+data/
+
+# VAPID web-push private key (generated at runtime)
+*.pem
+
+# Uploaded files (live on the /data volume in prod)
+backend/files/
+
+# Backend serves the built frontend from here in Docker — build artifact only
+backend/app/static/
+
+# Node / frontend build
+node_modules/
+frontend/dist/
+frontend/node_modules/
+
+# Native build artifacts (Tauri / Capacitor) — keep the projects, drop the outputs
+frontend/src-tauri/target/
+frontend/android/.gradle/
+frontend/android/build/
+frontend/android/app/build/
+frontend/android/local.properties
+
+# Env / editor
+.env
+.DS_Store
+
+# Local publishing workspace for Command_Centre rollout (never committed here)
+.publish/

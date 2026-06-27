@@ -1,0 +1,25 @@
+services:
+  command-center:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: command-center
+    ports:
+      # Exposed on all interfaces so the NAS's Tailscale IP can reach it.
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - DATABASE_URL=sqlite:////data/command_center.db
+      # VAPID web-push key, persisted on the data volume across restarts.
+      - VAPID_KEY_PATH=/data/vapid_private.pem
+      # Uploaded attachments live on the data volume too.
+      - FILES_DIR=/data/files
+      # Uncomment + set to require a token on every API call (recommended for the
+      # NAS). The same token is what you give Claude/Codex. Generate one with e.g.
+      #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+      # - AUTH_TOKEN=replace-with-a-long-random-token
+      # Daily digest time (server local time) + how many items:
+      # - DAILY_DIGEST_HOUR=8
+      # - DAILY_DIGEST_COUNT=3
+    restart: unless-stopped
