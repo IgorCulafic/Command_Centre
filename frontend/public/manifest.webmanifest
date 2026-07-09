@@ -1,0 +1,19 @@
+{
+  "name": "Command Center",
+  "short_name": "Command",
+  "description": "Your personal command center — tasks, notes, reminders, opportunities.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#16171d",
+  "theme_color": "#16171d",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
