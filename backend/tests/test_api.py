@@ -374,6 +374,50 @@ def test_group_space_rejects_items(client: TestClient):
     assert ok.status_code == 201
 
 
+def test_duplicate_item(client: TestClient):
+    sid = client.post("/api/spaces", json={"name": "Dup"}).json()["id"]
+    orig = client.post(
+        "/api/items",
+        json={
+            "space_id": sid,
+            "type": "task",
+            "title": "Original",
+            "priority": 5,
+            "metadata": {"tags": ["a"]},
+        },
+    ).json()
+    dup = client.post(f"/api/items/{orig['id']}/duplicate")
+    assert dup.status_code == 201
+    d = dup.json()
+    assert d["id"] != orig["id"]
+    assert d["title"] == "Original" and d["priority"] == 5
+    assert d["metadata"].get("tags") == ["a"]
+    assert d["completed_at"] is None
+    titles = [i["title"] for i in client.get(f"/api/items?space_id={sid}").json()]
+    assert titles.count("Original") == 2
+
+
+def test_muted_space_excluded_from_digest(client: TestClient, session: Session):
+    from app.services.scheduler import _top_active_titles
+
+    active = _status_id_by_behavior(client, 1, "active")
+    loud = client.post("/api/spaces", json={"name": "Loud"}).json()["id"]
+    quiet = client.post(
+        "/api/spaces", json={"name": "Quiet", "notifications_muted": True}
+    ).json()["id"]
+    client.post(
+        "/api/items",
+        json={"space_id": loud, "type": "task", "title": "HEAR ME", "status_id": active},
+    )
+    client.post(
+        "/api/items",
+        json={"space_id": quiet, "type": "task", "title": "SILENT", "status_id": active},
+    )
+    titles = _top_active_titles(session, 20)
+    assert "HEAR ME" in titles
+    assert "SILENT" not in titles
+
+
 def test_settings_get_update_and_clamp(client: TestClient):
     base = client.get("/api/settings").json()
     assert set(base) == {"digest_hour", "digest_minute", "digest_count"}

@@ -1,6 +1,24 @@
-import { useMemo, useState } from "react"
+import { useMemo, useState, type CSSProperties } from "react"
 import { NavLink } from "react-router-dom"
-import { ChevronRight, Folder } from "lucide-react"
+import { ChevronRight, Folder, GripVertical } from "lucide-react"
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 import { useUpdateSpace } from "@/lib/queries"
 import { cn } from "@/lib/utils"
 import { ActionMenu } from "@/features/actions/ActionMenu"
@@ -27,10 +45,21 @@ export function SpacesTree({ nodes, counts, onNavigate }: SpacesTreeProps) {
       return next
     })
 
-  // ── Drag & drop: nest a space inside another, or back to top level ──────────
   const updateSpace = useUpdateSpace()
-  const [dragId, setDragId] = useState<number | null>(null)
-  const [overId, setOverId] = useState<number | null>(null)
+
+  // Drag reorder (@dnd-kit) + the menu's move/reorder helpers all key off a
+  // parent lookup and a flat list of every node.
+  const flat = useMemo(() => {
+    const out: SpaceNode[] = []
+    const walk = (ns: SpaceNode[]) => {
+      for (const n of ns) {
+        out.push(n)
+        walk(n.children)
+      }
+    }
+    walk(nodes)
+    return out
+  }, [nodes])
 
   const parentOf = useMemo(() => {
     const m = new Map<number, number | null>()
@@ -53,6 +82,7 @@ export function SpacesTree({ nodes, counts, onNavigate }: SpacesTreeProps) {
     return false
   }
 
+  // Re-parent a space (used by the menu: "Move to top level"). Cycle-safe.
   const move = (draggedId: number, newParentId: number | null) => {
     if (draggedId === newParentId) return
     if (newParentId != null && isDescendant(draggedId, newParentId)) return
@@ -60,8 +90,7 @@ export function SpacesTree({ nodes, counts, onNavigate }: SpacesTreeProps) {
     updateSpace.mutate({ id: draggedId, body: { parent_id: newParentId } })
   }
 
-  // Reorder a space among its siblings by re-numbering positions (reliable on
-  // every platform, unlike native drag).
+  // Reorder a space among its siblings by re-numbering positions.
   const reorderSibling = (
     nodeId: number,
     siblings: SpaceNode[],
@@ -79,54 +108,70 @@ export function SpacesTree({ nodes, counts, onNavigate }: SpacesTreeProps) {
     })
   }
 
-  const drag: DragApi = {
-    dragId,
-    setDragId,
-    overId,
-    setOverId,
-    move,
-    reorderSibling,
+  // Drag-and-drop reorder within a sibling level (dropping across levels is a
+  // no-op — re-nesting is done via the menu, which is unambiguous).
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 200, tolerance: 8 },
+    }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+
+  const onDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e
+    if (!over || active.id === over.id) return
+    const activeId = Number(active.id)
+    const overId = Number(over.id)
+    const ap = parentOf.get(activeId) ?? null
+    const op = parentOf.get(overId) ?? null
+    if (ap !== op) return // only reorder within the same level
+    const siblings = flat
+      .filter((s) => (parentOf.get(s.id) ?? null) === ap)
+      .sort((a, b) => a.position - b.position)
+    const from = siblings.findIndex((s) => s.id === activeId)
+    const to = siblings.findIndex((s) => s.id === overId)
+    if (from < 0 || to < 0) return
+    arrayMove(siblings, from, to).forEach((s, idx) => {
+      if (s.position !== idx) {
+        updateSpace.mutate({ id: s.id, body: { position: idx } })
+      }
+    })
   }
 
+  const drag: DragApi = { move, reorderSibling }
+
   return (
-    <ul
-      className="space-y-0.5"
-      // Dropping on empty list area moves the space to the top level.
-      onDragOver={(e) => {
-        if (dragId != null) {
-          e.preventDefault()
-          setOverId(null)
-        }
-      }}
-      onDrop={(e) => {
-        e.preventDefault()
-        if (dragId != null) move(dragId, null)
-        setDragId(null)
-        setOverId(null)
-      }}
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={onDragEnd}
     >
-      {nodes.map((node) => (
-        <TreeRow
-          key={node.id}
-          node={node}
-          siblings={nodes}
-          depth={0}
-          counts={counts}
-          collapsed={collapsed}
-          toggle={toggle}
-          onNavigate={onNavigate}
-          drag={drag}
-        />
-      ))}
-    </ul>
+      <ul className="space-y-0.5">
+        <SortableContext
+          items={nodes.map((n) => n.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          {nodes.map((node) => (
+            <TreeRow
+              key={node.id}
+              node={node}
+              siblings={nodes}
+              depth={0}
+              counts={counts}
+              collapsed={collapsed}
+              toggle={toggle}
+              onNavigate={onNavigate}
+              drag={drag}
+            />
+          ))}
+        </SortableContext>
+      </ul>
+    </DndContext>
   )
 }
 
 interface DragApi {
-  dragId: number | null
-  setDragId: (id: number | null) => void
-  overId: number | null
-  setOverId: (id: number | null) => void
   move: (draggedId: number, newParentId: number | null) => void
   reorderSibling: (
     nodeId: number,
@@ -174,126 +219,123 @@ function TreeRow({
     onMoveToTopLevel: () => drag.move(node.id, null),
   })
 
+  const { setNodeRef, attributes, listeners, transform, transition, isDragging } =
+    useSortable({ id: node.id })
+  const rowStyle: CSSProperties = {
+    paddingLeft: depth * 14,
+    transform: CSS.Transform.toString(transform),
+    transition,
+  }
+
   return (
     <li>
       <ObjectContextMenu groups={actions}>
-      <div
-        className={cn(
-          "group flex items-center gap-0.5 rounded-md",
-          drag.overId === node.id && "bg-sidebar-accent/50 ring-1 ring-primary/50",
-        )}
-        style={{ paddingLeft: depth * 14 }}
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.setData("text/plain", String(node.id))
-          e.dataTransfer.effectAllowed = "move"
-          drag.setDragId(node.id)
-        }}
-        onDragEnd={() => {
-          drag.setDragId(null)
-          drag.setOverId(null)
-        }}
-        onDragOver={(e) => {
-          if (drag.dragId != null && drag.dragId !== node.id) {
-            e.preventDefault()
-            e.stopPropagation()
-            drag.setOverId(node.id)
-          }
-        }}
-        onDrop={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          const id = Number(e.dataTransfer.getData("text/plain")) || drag.dragId
-          if (id != null) drag.move(id, node.id)
-          drag.setDragId(null)
-          drag.setOverId(null)
-        }}
-      >
-        {node.is_group ? (
-          // A group is a collapsible section header — it holds spaces, not items,
-          // so the whole row toggles its children instead of navigating.
-          <button
-            type="button"
-            onClick={() => toggle(node.id)}
-            className="flex flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-foreground"
+        <div
+          ref={setNodeRef}
+          className={cn(
+            "group flex items-center gap-0.5 rounded-md",
+            isDragging && "relative z-10 opacity-70",
+          )}
+          style={rowStyle}
+        >
+          <span
+            {...attributes}
+            {...listeners}
+            aria-label={`Reorder ${node.name}`}
+            className="grid size-5 shrink-0 cursor-grab touch-none place-items-center rounded text-muted-foreground/50 hover:bg-sidebar-accent hover:text-foreground active:cursor-grabbing"
           >
-            <ChevronRight
-              className={cn(
-                "size-3.5 shrink-0 transition-transform",
-                !isCollapsed && "rotate-90",
-              )}
-            />
-            <SpaceIcon node={node} />
-            <span className="flex-1 truncate text-left">{node.name}</span>
-          </button>
-        ) : (
-          <>
-            {hasChildren ? (
-              <button
-                type="button"
-                onClick={() => toggle(node.id)}
-                aria-label={isCollapsed ? "Expand" : "Collapse"}
-                className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-              >
-                <ChevronRight
-                  className={cn(
-                    "size-3.5 transition-transform",
-                    !isCollapsed && "rotate-90",
-                  )}
-                />
-              </button>
-            ) : (
-              <span className="w-5 shrink-0" />
-            )}
+            <GripVertical className="size-3.5" />
+          </span>
 
-            <NavLink
-              to={`/space/${node.id}`}
-              onClick={onNavigate}
-              draggable={false}
-              className={({ isActive }) =>
-                cn(
-                  "flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                  isActive &&
-                    "bg-sidebar-accent font-medium text-sidebar-accent-foreground",
-                )
-              }
+          {node.is_group ? (
+            // A group is a collapsible section header — it holds spaces, not items,
+            // so the whole row toggles its children instead of navigating.
+            <button
+              type="button"
+              onClick={() => toggle(node.id)}
+              className="flex flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-foreground"
             >
+              <ChevronRight
+                className={cn(
+                  "size-3.5 shrink-0 transition-transform",
+                  !isCollapsed && "rotate-90",
+                )}
+              />
               <SpaceIcon node={node} />
-              <span className="flex-1 truncate">{node.name}</span>
-              {count > 0 && (
-                <span className="ml-auto rounded-full bg-sidebar-accent px-1.5 py-0.5 text-xs tabular-nums text-muted-foreground group-hover:bg-sidebar/60">
-                  {count}
-                </span>
+              <span className="flex-1 truncate text-left">{node.name}</span>
+            </button>
+          ) : (
+            <>
+              {hasChildren ? (
+                <button
+                  type="button"
+                  onClick={() => toggle(node.id)}
+                  aria-label={isCollapsed ? "Expand" : "Collapse"}
+                  className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+                >
+                  <ChevronRight
+                    className={cn(
+                      "size-3.5 transition-transform",
+                      !isCollapsed && "rotate-90",
+                    )}
+                  />
+                </button>
+              ) : (
+                <span className="w-5 shrink-0" />
               )}
-            </NavLink>
-          </>
-        )}
 
-        <ActionMenu
-          groups={actions}
-          align="start"
-          side="right"
-          label={`Actions for ${node.name}`}
-          className="size-6 opacity-70 hover:bg-sidebar-accent"
-        />
-      </div>
+              <NavLink
+                to={`/space/${node.id}`}
+                onClick={onNavigate}
+                className={({ isActive }) =>
+                  cn(
+                    "flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                    isActive &&
+                      "bg-sidebar-accent font-medium text-sidebar-accent-foreground",
+                  )
+                }
+              >
+                <SpaceIcon node={node} />
+                <span className="flex-1 truncate">{node.name}</span>
+                {count > 0 && (
+                  <span className="ml-auto rounded-full bg-sidebar-accent px-1.5 py-0.5 text-xs tabular-nums text-muted-foreground group-hover:bg-sidebar/60">
+                    {count}
+                  </span>
+                )}
+              </NavLink>
+            </>
+          )}
+
+          <ActionMenu
+            groups={actions}
+            align="start"
+            side="right"
+            label={`Actions for ${node.name}`}
+            className="size-6 opacity-70 hover:bg-sidebar-accent"
+          />
+        </div>
       </ObjectContextMenu>
 
       {hasChildren && !isCollapsed && (
         <ul className="mt-0.5 space-y-0.5">
-          {node.children.map((child) => (
-            <TreeRow
-              key={child.id}
-              node={child}
-              siblings={node.children}
-              depth={depth + 1}
-              counts={counts}
-              collapsed={collapsed}
-              toggle={toggle}
-              onNavigate={onNavigate}
-              drag={drag}
-            />
-          ))}
+          <SortableContext
+            items={node.children.map((c) => c.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            {node.children.map((child) => (
+              <TreeRow
+                key={child.id}
+                node={child}
+                siblings={node.children}
+                depth={depth + 1}
+                counts={counts}
+                collapsed={collapsed}
+                toggle={toggle}
+                onNavigate={onNavigate}
+                drag={drag}
+              />
+            ))}
+          </SortableContext>
         </ul>
       )}
     </li>

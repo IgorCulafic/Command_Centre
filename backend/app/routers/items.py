@@ -175,6 +175,34 @@ def create_item(payload: ItemCreate, session: Session = Depends(get_session)):
     return _item_to_read(item)
 
 
+@router.post(
+    "/{item_id}/duplicate", response_model=ItemRead, status_code=status.HTTP_201_CREATED
+)
+def duplicate_item(item_id: int, session: Session = Depends(get_session)):
+    """Copy an item into the same space — fresh (active status, no completed/remind
+    stamps), so recurring-style tasks don't need re-entry. Tags/subtasks carry over."""
+    item = session.get(Item, item_id)
+    if not item or item.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    copy = Item(
+        space_id=item.space_id,
+        type=item.type,
+        title=item.title,
+        body=item.body,
+        status_id=_default_status_id(session, item.space_id, item.type),
+        priority=item.priority,
+        due_at=item.due_at,
+        remind_at=None,
+        position=item.position,
+        is_pinned=False,
+        metadata_=dict(item.metadata_ or {}),
+    )
+    session.add(copy)
+    session.commit()
+    session.refresh(copy)
+    return _item_to_read(copy)
+
+
 @router.get("/trash", response_model=List[ItemRead])
 def list_trash(session: Session = Depends(get_session)):
     """Soft-deleted items, most-recently-deleted first (for the Trash view).

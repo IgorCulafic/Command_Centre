@@ -143,6 +143,9 @@ export const api = {
   /** Bring a soft-deleted item back. */
   restoreItem: (id: number) =>
     request<Item>(`/items/${id}/restore`, { method: "POST" }),
+  /** Copy an item into the same space (fresh, active). */
+  duplicateItem: (id: number) =>
+    request<Item>(`/items/${id}/duplicate`, { method: "POST" }),
   /** Permanently delete a trashed item. */
   purgeItem: (id: number) =>
     request<void>(`/items/${id}/purge`, { method: "DELETE" }),

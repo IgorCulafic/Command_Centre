@@ -15,7 +15,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlmodel import Session, select
 
 from app.db import engine, utcnow
-from app.models import Item, PushSubscription, Status
+from app.models import Item, PushSubscription, Space, Status
 from app.services.push import send_push
 from app.services.settings_store import get_digest_config
 
@@ -31,12 +31,17 @@ def send_due_reminders() -> dict:
     now = utcnow()
     with Session(engine) as session:
         due = session.exec(
-            select(Item).where(
+            select(Item)
+            .join(Space, Item.space_id == Space.id)
+            .where(
                 Item.deleted_at.is_(None),
                 Item.completed_at.is_(None),
                 Item.reminded_at.is_(None),
                 Item.remind_at.is_not(None),
                 Item.remind_at <= now,
+                Space.notifications_muted == False,  # noqa: E712
+                Space.deleted_at.is_(None),
+                Space.archived_at.is_(None),
             )
         ).all()
         if not due:
@@ -66,7 +71,14 @@ def _top_active_titles(session: Session, n: int) -> list[str]:
     query = (
         select(Item)
         .join(Status, Item.status_id == Status.id)
-        .where(Item.deleted_at.is_(None), Status.behavior == "active")
+        .join(Space, Item.space_id == Space.id)
+        .where(
+            Item.deleted_at.is_(None),
+            Status.behavior == "active",
+            Space.notifications_muted == False,  # noqa: E712
+            Space.deleted_at.is_(None),
+            Space.archived_at.is_(None),
+        )
         .order_by(Item.priority.desc(), Item.position)
         .limit(n)
     )

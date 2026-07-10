@@ -112,6 +112,14 @@ export function usePurgeItem() {
   })
 }
 
+export function useDuplicateItem() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.duplicateItem(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["items"] }),
+  })
+}
+
 // Server-side settings (daily-digest schedule + count) — persisted in the DB and
 // applied to the scheduler live, distinct from the client-only useSettings prefs.
 export function useServerSettings() {
